@@ -35,6 +35,7 @@ import androidx.core.content.FileProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.crashguard.data.MainUiState
+import com.example.crashguard.ui.camera.CameraVerificationOverlay
 import kotlinx.coroutines.delay
 import java.io.File
 import java.util.ArrayList
@@ -76,11 +77,12 @@ fun MainScreen(
         modifier = Modifier
             .fillMaxSize()
             .background(backgroundColor)
-            .verticalScroll(rememberScrollState())
-            .padding(16.dp)
     ) {
         Column(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(16.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
@@ -321,7 +323,7 @@ fun MainScreen(
                             modifier = Modifier.padding(bottom = 10.dp)
                         )
 
-                        // 6 Large, High-Contrast Event Buttons (2 Columns x 3 Rows)
+                        // 6 Large Event Buttons
                         Column(
                             modifier = Modifier.fillMaxWidth(),
                             verticalArrangement = Arrangement.spacedBy(10.dp)
@@ -332,13 +334,13 @@ fun MainScreen(
                             ) {
                                 EventButton(
                                     label = "POTHOLE",
-                                    backgroundColor = Color(0xFFE65100), // Amber-Orange
+                                    backgroundColor = Color(0xFFE65100),
                                     modifier = Modifier.weight(1f),
                                     onClick = { viewModel.markEvent("POTHOLE") }
                                 )
                                 EventButton(
                                     label = "SPEED BREAKER",
-                                    backgroundColor = Color(0xFFF57F17), // Yellow-Amber
+                                    backgroundColor = Color(0xFFF57F17),
                                     modifier = Modifier.weight(1f),
                                     onClick = { viewModel.markEvent("SPEED_BREAKER") }
                                 )
@@ -350,13 +352,13 @@ fun MainScreen(
                             ) {
                                 EventButton(
                                     label = "HARD BRAKE",
-                                    backgroundColor = Color(0xFFC62828), // Crimson Red
+                                    backgroundColor = Color(0xFFC62828),
                                     modifier = Modifier.weight(1f),
                                     onClick = { viewModel.markEvent("HARD_BRAKE") }
                                 )
                                 EventButton(
                                     label = "ACCELERATION",
-                                    backgroundColor = Color(0xFF00897B), // Teal
+                                    backgroundColor = Color(0xFF00897B),
                                     modifier = Modifier.weight(1f),
                                     onClick = { viewModel.markEvent("ACCELERATION") }
                                 )
@@ -368,13 +370,13 @@ fun MainScreen(
                             ) {
                                 EventButton(
                                     label = "ROUGH ROAD",
-                                    backgroundColor = Color(0xFF6D4C41), // Brown
+                                    backgroundColor = Color(0xFF6D4C41),
                                     modifier = Modifier.weight(1f),
                                     onClick = { viewModel.markEvent("ROUGH_ROAD") }
                                 )
                                 EventButton(
                                     label = "OTHER",
-                                    backgroundColor = Color(0xFF5E35B1), // Deep Purple
+                                    backgroundColor = Color(0xFF5E35B1),
                                     modifier = Modifier.weight(1f),
                                     onClick = { viewModel.markEvent("OTHER") }
                                 )
@@ -507,6 +509,19 @@ fun MainScreen(
                     }
                 }
             }
+        }
+
+        // Camera Verification Overlay downstream of PERSISTENT_ABNORMAL
+        state.recording.cameraVerification?.let { cameraSession ->
+            CameraVerificationOverlay(
+                session = cameraSession,
+                onOutcomeSelected = { outcome, videoPath ->
+                    viewModel.resolveCameraOutcome(outcome, videoPath)
+                },
+                onDismiss = {
+                    viewModel.dismissCameraVerification()
+                }
+            )
         }
     }
 }

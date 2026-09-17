@@ -176,7 +176,7 @@ class CrashDetectionPipeline(
         if (s2Result.isCrashConfirmed) {
             if (!experimentalRecoveryEnabled) {
                 // Baseline Mode: immediate crash confirmation
-                confirmCrashAlert(currentTs, s2Result)
+                confirmCrashAlert(currentTs, s2Result, recoveryResult = null)
             } else {
                 // Experimental Mode: enter recovery observation
                 pendingStage2Result = s2Result
@@ -222,7 +222,7 @@ class CrashDetectionPipeline(
 
             RecoveryState.PERSISTENT_ABNORMAL -> {
                 logRecoveryDecision(triggerElapsedS, triggerStage1Score, s2Result, recoveryResult, "CRASH")
-                confirmCrashAlert(currentTs, s2Result)
+                confirmCrashAlert(currentTs, s2Result, recoveryResult)
             }
 
             RecoveryState.OBSERVING -> {
@@ -257,22 +257,35 @@ class CrashDetectionPipeline(
         DetectionLogger.i(TAG_RECOVERY, msg)
     }
 
-    private fun confirmCrashAlert(currentTs: Long, s2Result: Stage2Result) {
+    private fun confirmCrashAlert(
+        currentTs: Long,
+        s2Result: Stage2Result,
+        recoveryResult: RidingContinuityResult?
+    ) {
         val alert = CrashAlertState(
             timestampNs = triggerTimestampNs,
             stage1Score = triggerStage1Score,
             stage2Score = s2Result.continuousCrashScore,
+            shockScore = s2Result.scoreShock,
+            temporalScore = s2Result.temporalImpactRotationScore,
+            temporalDelayS = s2Result.temporalDelayS,
+            recoveryState = recoveryResult?.state?.name ?: "PERSISTENT_ABNORMAL",
+            recoveryObservedS = recoveryResult?.observedS ?: s2Result.detectionLatencyS,
+            recoveryHorizonS = recoveryResult?.horizonS ?: 3.0f,
             isConfirmed = true,
             details = String.format(
                 Locale.US,
-                "S1=%.3f, S2=%.3f, Latency=%.2fs",
+                "S1=%.3f, S2=%.3f, Shock=%.2f, Temporal=%.2f (delay=%.2fs), Latency=%.2fs",
                 triggerStage1Score,
                 s2Result.continuousCrashScore,
+                s2Result.scoreShock,
+                s2Result.temporalImpactRotationScore,
+                s2Result.temporalDelayS,
                 s2Result.detectionLatencyS
             )
         )
 
-        // Notify listener (UI / notifications)
+        // Notify listener (UI / notifications / camera manager)
         onCrashDetected?.invoke(alert)
 
         // Enter 5.0s cooldown to suppress repeated cascade alarms for same physical crash

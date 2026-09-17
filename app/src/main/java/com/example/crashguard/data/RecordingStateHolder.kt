@@ -1,5 +1,7 @@
 package com.example.crashguard.data
 
+import com.example.crashguard.camera.CameraVerificationOutcome
+import com.example.crashguard.camera.CameraVerificationSession
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -25,7 +27,8 @@ data class RecordingState(
     val sessionId: String? = null,
     val filePath: String? = null,
     val eventsFilePath: String? = null,
-    val crashAlert: CrashAlertState? = null
+    val crashAlert: CrashAlertState? = null,
+    val cameraVerification: CameraVerificationSession? = null
 )
 
 data class MainUiState(
@@ -91,7 +94,9 @@ object RecordingStateHolder {
                     lastMarkedTimestampNs = null,
                     sessionId = sessionId,
                     filePath = filePath,
-                    eventsFilePath = eventsFilePath
+                    eventsFilePath = eventsFilePath,
+                    crashAlert = null,
+                    cameraVerification = null
                 )
             )
         }
@@ -147,6 +152,48 @@ object RecordingStateHolder {
             currentState.copy(
                 recording = currentState.recording.copy(
                     crashAlert = null
+                )
+            )
+        }
+    }
+
+    fun startCameraVerification(session: CameraVerificationSession) {
+        _uiState.update { currentState ->
+            currentState.copy(
+                recording = currentState.recording.copy(
+                    cameraVerification = session
+                )
+            )
+        }
+    }
+
+    fun updateCameraCountdown(remainingSeconds: Int) {
+        _uiState.update { currentState ->
+            val existing = currentState.recording.cameraVerification ?: return@update currentState
+            currentState.copy(
+                recording = currentState.recording.copy(
+                    cameraVerification = existing.copy(countdownRemainingSeconds = remainingSeconds)
+                )
+            )
+        }
+    }
+
+    fun setCameraOutcome(outcome: CameraVerificationOutcome) {
+        _uiState.update { currentState ->
+            val existing = currentState.recording.cameraVerification ?: return@update currentState
+            currentState.copy(
+                recording = currentState.recording.copy(
+                    cameraVerification = existing.copy(outcome = outcome)
+                )
+            )
+        }
+    }
+
+    fun dismissCameraVerification() {
+        _uiState.update { currentState ->
+            currentState.copy(
+                recording = currentState.recording.copy(
+                    cameraVerification = null
                 )
             )
         }

@@ -23,6 +23,7 @@ import com.example.crashguard.MainActivity
 import com.example.crashguard.data.CrashAlertState
 import com.example.crashguard.data.RecordingStateHolder
 import com.example.crashguard.data.SensorSample
+import com.example.crashguard.camera.CameraVerificationManager
 import com.example.crashguard.detection.CrashDetectionPipeline
 import com.example.crashguard.detection.IsolationForestModel
 import com.example.crashguard.detection.Stage2Verifier
@@ -220,8 +221,9 @@ class CrashDetectionService : Service(), SensorEventListener {
                     stage1Model = stage1Model,
                     stage2Verifier = Stage2Verifier(),
                     onCrashDetected = { alert ->
-                        Log.e(TAG, "!!! CRASH DETECTED !!! Alert: $alert")
+                        Log.e(TAG, "!!! CRASH DETECTED (PERSISTENT_ABNORMAL) !!! Alert: $alert")
                         RecordingStateHolder.reportCrashAlert(alert)
+                        CameraVerificationManager.onCrashCandidateAlert(alert, this)
                     }
                 )
                 Log.i(TAG, "Initialized real-time CrashDetectionPipeline successfully")
@@ -322,6 +324,8 @@ class CrashDetectionService : Service(), SensorEventListener {
         }
         syncDiagnostics.logSummary()
         csvLogger = null
+
+        CameraVerificationManager.reset()
 
         // Close CrashDetectionPipeline
         try {
