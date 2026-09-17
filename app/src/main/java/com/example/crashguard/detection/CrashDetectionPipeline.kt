@@ -9,19 +9,26 @@ import java.io.Closeable
 import java.util.Locale
 
 /**
- * High-level coordinator for the Two-Stage Real-Time Crash Detection Pipeline:
+ * High-level coordinator for the Real-Time Crash Detection Pipeline:
  *
  * Stage 1: Phone-Native Isolation Forest Anomaly Trigger (OOF p95 >= 0.571849)
  * Stage 2: Causal Crash-Signature Verification (Continuous score >= 0.50 after 1.2s post-trigger)
+ * Experimental Stage: Riding Continuity / Recovery State Machine (determines recovery vs persistent abnormal)
  */
 class CrashDetectionPipeline(
     private val stage1Model: IsolationForestModel,
     private val stage2Verifier: Stage2Verifier = Stage2Verifier(),
+    val recoveryStateMachine: RidingRecoveryStateMachine = RidingRecoveryStateMachine(),
+    val experimentalRecoveryEnabled: Boolean = EXPERIMENTAL_RECOVERY_ENABLED,
     val onCrashDetected: ((CrashAlertState) -> Unit)? = null
 ) : Closeable {
 
     companion object {
         private const val TAG = "CrashGuardPipeline"
+        private const val TAG_RECOVERY = "CrashGuardRecovery"
+
+        // Experimental recovery layer switch (toggle to restore baseline immediately)
+        var EXPERIMENTAL_RECOVERY_ENABLED = true
 
         // Locked ML Thresholds
         const val STAGE1_P95_THRESHOLD = 0.571849f
@@ -37,10 +44,11 @@ class CrashDetectionPipeline(
     enum class PipelineState {
         IDLE,
         COLLECTING_POST_TRIGGER,
+        OBSERVING_RECOVERY,
         COOLDOWN
     }
 
-    val ringBuffer = SensorRingBuffer(capacity = 350)
+    val ringBuffer = SensorRingBuffer(capacity = 500)
 
     private var currentState = PipelineState.IDLE
     private var lastEvalTimestampNs = 0L
@@ -50,6 +58,7 @@ class CrashDetectionPipeline(
     private var triggerStage1Score = 0f
     private var triggerWindowSnapshot: List<SensorSample> = emptyList()
     private var postTriggerSamples = ArrayList<SensorSample>()
+    private var pendingStage2Result: Stage2Result? = null
 
     // Cooldown tracking
     private var cooldownUntilTimestampNs = 0L
@@ -80,6 +89,14 @@ class CrashDetectionPipeline(
                 }
             }
 
+            PipelineState.OBSERVING_RECOVERY -> {
+                if (currentTs > triggerTimestampNs) {
+                    postTriggerSamples.add(sample)
+                }
+
+                evaluateRecoveryConfirmation(currentTs)
+            }
+
             PipelineState.IDLE -> {
                 // Check if buffer contains at least 3.0 seconds of data and stride interval elapsed
                 val bufferDurationNs = ringBuffer.getDurationNs()
@@ -107,6 +124,7 @@ class CrashDetectionPipeline(
             triggerStage1Score = s1Score
             triggerWindowSnapshot = window
             postTriggerSamples.clear()
+            pendingStage2Result = null
 
             currentState = PipelineState.COLLECTING_POST_TRIGGER
             DetectionLogger.w(
@@ -156,34 +174,115 @@ class CrashDetectionPipeline(
         )
 
         if (s2Result.isCrashConfirmed) {
-            val alert = CrashAlertState(
-                timestampNs = triggerTimestampNs,
-                stage1Score = triggerStage1Score,
-                stage2Score = s2Result.continuousCrashScore,
-                isConfirmed = true,
-                details = String.format(
-                    Locale.US,
-                    "S1=%.3f, S2=%.3f, Latency=%.2fs",
-                    triggerStage1Score,
-                    s2Result.continuousCrashScore,
-                    s2Result.detectionLatencyS
-                )
-            )
-
-            // Notify listener (UI / notifications)
-            onCrashDetected?.invoke(alert)
-
-            // Enter 5.0s cooldown to suppress repeated cascade alarms for same physical crash
-            currentState = PipelineState.COOLDOWN
-            cooldownUntilTimestampNs = currentTs + COOLDOWN_DURATION_NS
+            if (!experimentalRecoveryEnabled) {
+                // Baseline Mode: immediate crash confirmation
+                confirmCrashAlert(currentTs, s2Result)
+            } else {
+                // Experimental Mode: enter recovery observation
+                pendingStage2Result = s2Result
+                evaluateRecoveryConfirmation(currentTs)
+            }
         } else {
             // Stage 2 suppressed false alarm -> return directly to IDLE
             currentState = PipelineState.IDLE
+            postTriggerSamples.clear()
+            triggerWindowSnapshot = emptyList()
+            pendingStage2Result = null
         }
+    }
+
+    /**
+     * Evaluates the post-event riding recovery state machine.
+     */
+    private fun evaluateRecoveryConfirmation(currentTs: Long) {
+        val s2Result = pendingStage2Result ?: return
+        val fullSequence = ArrayList<SensorSample>(triggerWindowSnapshot.size + postTriggerSamples.size)
+        fullSequence.addAll(triggerWindowSnapshot)
+        fullSequence.addAll(postTriggerSamples)
+
+        val recoveryResult = recoveryStateMachine.evaluateRecovery(
+            samples = fullSequence,
+            triggerTimestampNs = triggerTimestampNs
+        )
+
+        val triggerElapsedS = if (triggerWindowSnapshot.isNotEmpty()) {
+            (triggerTimestampNs - triggerWindowSnapshot.first().timestampNs).toFloat() / 1e9f
+        } else {
+            0.0f
+        }
+
+        when (recoveryResult.state) {
+            RecoveryState.RECOVERED -> {
+                logRecoveryDecision(triggerElapsedS, triggerStage1Score, s2Result, recoveryResult, "NON_CRASH")
+                currentState = PipelineState.IDLE
+                postTriggerSamples.clear()
+                triggerWindowSnapshot = emptyList()
+                pendingStage2Result = null
+            }
+
+            RecoveryState.PERSISTENT_ABNORMAL -> {
+                logRecoveryDecision(triggerElapsedS, triggerStage1Score, s2Result, recoveryResult, "CRASH")
+                confirmCrashAlert(currentTs, s2Result)
+            }
+
+            RecoveryState.OBSERVING -> {
+                currentState = PipelineState.OBSERVING_RECOVERY
+            }
+        }
+    }
+
+    private fun logRecoveryDecision(
+        triggerElapsedS: Float,
+        s1Score: Float,
+        s2Result: Stage2Result,
+        recoveryResult: RidingContinuityResult,
+        decision: String
+    ) {
+        val msg = String.format(
+            Locale.US,
+            "candidate t=%.2f\nS1=%.4f\nS2=%.4f\nshock=%.4f\ntemporal=%.4f\ndelay=%.4fs\nstate=%s\nrecovery_time=%.2fs/%.1fs\nref_a_std=%.4f\nref_g_mean=%.4f\ndecision=%s",
+            triggerElapsedS,
+            s1Score,
+            s2Result.continuousCrashScore,
+            s2Result.scoreShock,
+            s2Result.temporalImpactRotationScore,
+            s2Result.temporalDelayS,
+            recoveryResult.state.name,
+            recoveryResult.observedS,
+            recoveryResult.horizonS,
+            recoveryResult.referenceAccelStd,
+            recoveryResult.referenceGyroMean,
+            decision
+        )
+        DetectionLogger.i(TAG_RECOVERY, msg)
+    }
+
+    private fun confirmCrashAlert(currentTs: Long, s2Result: Stage2Result) {
+        val alert = CrashAlertState(
+            timestampNs = triggerTimestampNs,
+            stage1Score = triggerStage1Score,
+            stage2Score = s2Result.continuousCrashScore,
+            isConfirmed = true,
+            details = String.format(
+                Locale.US,
+                "S1=%.3f, S2=%.3f, Latency=%.2fs",
+                triggerStage1Score,
+                s2Result.continuousCrashScore,
+                s2Result.detectionLatencyS
+            )
+        )
+
+        // Notify listener (UI / notifications)
+        onCrashDetected?.invoke(alert)
+
+        // Enter 5.0s cooldown to suppress repeated cascade alarms for same physical crash
+        currentState = PipelineState.COOLDOWN
+        cooldownUntilTimestampNs = currentTs + COOLDOWN_DURATION_NS
 
         // Clear temporary buffers
         postTriggerSamples.clear()
         triggerWindowSnapshot = emptyList()
+        pendingStage2Result = null
     }
 
     fun reset() {
@@ -191,6 +290,7 @@ class CrashDetectionPipeline(
         ringBuffer.clear()
         postTriggerSamples.clear()
         triggerWindowSnapshot = emptyList()
+        pendingStage2Result = null
         lastEvalTimestampNs = 0L
     }
 
