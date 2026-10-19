@@ -52,69 +52,47 @@ The application follows a multi-stage approach rather than treating every unusua
 
 
 
-```text
 
-Android Accelerometer and Gyroscope
 
-&#x20;                |
+flowchart TD
 
-&#x20;                v
+&#x20;   A\["Accelerometer and Gyroscope"] --> B\["Sensor Data Processing"]
 
-&#x20;       Sensor Data Processing
+&#x20;   B --> C\["Stage 1: ML Anomaly Detection"]
 
-&#x20;                |
+&#x20;   C --> D\["Stage 2: Crash-Signature Checks"]
 
-&#x20;                v
+&#x20;   D --> E\["Recovery-State Evaluation"]
 
-&#x20;     Stage 1: ML Anomaly Detection
+&#x20;   E --> F\["Potential Incident Trigger"]
 
-&#x20;                |
+&#x20;   F --> G\["Camera Evidence Collection"]
 
-&#x20;                v
+&#x20;   G --> H\["Gemini Vision Verification"]
 
-&#x20;     Stage 2: Crash-Signature Checks
+&#x20;   H --> I\["Incident Handling and Alerting"]
 
-&#x20;                |
+&#x20;   I --> J\["Local Notification"]
 
-&#x20;                v
+&#x20;   I --> K\["Emergency SMS"]
 
-&#x20;      Recovery-State Evaluation
 
-&#x20;                |
 
-&#x20;                v
+&#x20;   classDef sensor fill:#dbeafe,stroke:#2563eb,color:#111827
 
-&#x20;       Potential Incident Trigger
+&#x20;   classDef detection fill:#fef3c7,stroke:#d97706,color:#111827
 
-&#x20;                |
+&#x20;   classDef alert fill:#dcfce7,stroke:#16a34a,color:#111827
 
-&#x20;                v
 
-&#x20;     Camera Evidence Collection
 
-&#x20;                |
+&#x20;   class A,B sensor
 
-&#x20;                v
+&#x20;   class C,D,E,F,G,H detection
 
-&#x20;       Gemini Vision Verification
+&#x20;   class I,J,K alert
 
-&#x20;                |
 
-&#x20;                v
-
-&#x20;      Incident Handling and Alerting
-
-&#x20;                |
-
-&#x20;         +------+------+
-
-&#x20;         |             |
-
-&#x20;         v             v
-
-&#x20;   Local Notification  Emergency SMS
-
-```
 
 
 
