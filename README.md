@@ -48,11 +48,13 @@ Feature availability may depend on device capabilities, runtime permissions, net
 
 
 
+
+
 The application follows a multi-stage approach rather than treating every unusual sensor reading as a crash.
 
 
 
-
+```mermaid
 
 flowchart TD
 
@@ -92,7 +94,7 @@ flowchart TD
 
 &#x20;   class I,J,K alert
 
-
+```
 
 
 
