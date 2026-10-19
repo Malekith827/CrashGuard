@@ -224,6 +224,21 @@ class CrashDetectionService : Service(), SensorEventListener {
                         Log.e(TAG, "!!! CRASH DETECTED (PERSISTENT_ABNORMAL) !!! Alert: $alert")
                         RecordingStateHolder.reportCrashAlert(alert)
                         CameraVerificationManager.onCrashCandidateAlert(alert, this)
+                    },
+                    onTelemetryUpdated = { telemetry ->
+                        RecordingStateHolder.updatePipelineDiagnostics { current ->
+                            telemetry.copy(
+                                cameraState = current.cameraState,
+                                isCameraRecording = current.isCameraRecording,
+                                extractedFramesCount = current.extractedFramesCount,
+                                visionModel = current.visionModel,
+                                visionState = current.visionState,
+                                visionDecision = current.visionDecision,
+                                visionConfidence = current.visionConfidence,
+                                visionReason = current.visionReason,
+                                visionLatencyMs = current.visionLatencyMs
+                            )
+                        }
                     }
                 )
                 Log.i(TAG, "Initialized real-time CrashDetectionPipeline successfully")
@@ -261,6 +276,7 @@ class CrashDetectionService : Service(), SensorEventListener {
             }
             val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             manager.createNotificationChannel(channel)
+            com.example.crashguard.notification.CrashNotificationManager.createNotificationChannel(this)
         }
 
         val pendingIntent = PendingIntent.getActivity(

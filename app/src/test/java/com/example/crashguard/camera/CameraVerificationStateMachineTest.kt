@@ -2,6 +2,8 @@ package com.example.crashguard.camera
 
 import com.example.crashguard.data.CrashAlertState
 import com.example.crashguard.detection.RecoveryState
+import com.example.crashguard.vision.VisionClassificationResult
+import com.example.crashguard.vision.VisionDecision
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -37,7 +39,6 @@ class CameraVerificationStateMachineTest {
 
     @Test
     fun testRecovered_doesNotStartCamera() {
-        // Requirement 1: RECOVERED -> camera does NOT start
         val alert = sampleAlert(state = "RECOVERED")
         val started = stateMachine.onImuRecoveryState(RecoveryState.RECOVERED, alert)
 
@@ -48,7 +49,6 @@ class CameraVerificationStateMachineTest {
 
     @Test
     fun testPersistentAbnormal_startsCameraExactlyOnce() {
-        // Requirement 2: PERSISTENT_ABNORMAL -> camera starts exactly once
         val alert = sampleAlert(state = "PERSISTENT_ABNORMAL")
         val started = stateMachine.onImuRecoveryState(RecoveryState.PERSISTENT_ABNORMAL, alert)
 
@@ -69,14 +69,12 @@ class CameraVerificationStateMachineTest {
 
     @Test
     fun testDuplicatePersistentAbnormal_doesNotLaunchMultipleCameraSessions() {
-        // Requirement 3: duplicate PERSISTENT_ABNORMAL events do not launch multiple camera sessions
         val alert1 = sampleAlert()
         val firstStart = stateMachine.onImuRecoveryState(RecoveryState.PERSISTENT_ABNORMAL, alert1)
         assertTrue("Expected first launch to succeed", firstStart)
 
         val firstSessionId = stateMachine.currentSession?.sessionId
 
-        // Simulate a duplicate / subsequent trigger arriving while verification is active
         val alert2 = sampleAlert().copy(timestampNs = 2_000_000_000L)
         val secondStart = stateMachine.onImuRecoveryState(RecoveryState.PERSISTENT_ABNORMAL, alert2)
 
@@ -87,7 +85,6 @@ class CameraVerificationStateMachineTest {
 
     @Test
     fun testFalseAlarmCancel_returnsToIdle() {
-        // Requirement 4: FALSE_ALARM/CANCEL -> returns to IDLE
         val alert = sampleAlert()
         stateMachine.onImuRecoveryState(RecoveryState.PERSISTENT_ABNORMAL, alert)
 
@@ -102,7 +99,6 @@ class CameraVerificationStateMachineTest {
 
     @Test
     fun testCrashConfirmed_returnsToIdleAfterFinalResult() {
-        // Requirement 5: CRASH_CONFIRMED -> returns to IDLE after final result
         val alert = sampleAlert()
         stateMachine.onImuRecoveryState(RecoveryState.PERSISTENT_ABNORMAL, alert)
 
@@ -123,7 +119,6 @@ class CameraVerificationStateMachineTest {
 
     @Test
     fun testUncertain_returnsToIdle() {
-        // Requirement 6: UNCERTAIN -> returns to IDLE
         val alert = sampleAlert()
         stateMachine.onImuRecoveryState(RecoveryState.PERSISTENT_ABNORMAL, alert)
 
@@ -134,5 +129,132 @@ class CameraVerificationStateMachineTest {
         stateMachine.dismiss()
         assertEquals("Expected state to return to IDLE", CameraState.IDLE, stateMachine.currentState)
         assertNull("Expected session to be cleared", stateMachine.currentSession)
+    }
+
+    // --- Race-Condition & In-Flight Vision Verification Tests ---
+
+    @Test
+    fun testVisionReturnsBeforeCountdownExpiry_resolvesNormally() {
+        // Requirement A: Vision returns before countdown expiry -> resolves normally
+        val alert = sampleAlert()
+        stateMachine.onImuRecoveryState(RecoveryState.PERSISTENT_ABNORMAL, alert)
+        stateMachine.onVisionAnalysisStarted("/recordings/crash_1.mp4")
+
+        val visionResult = VisionClassificationResult(
+            decision = VisionDecision.NO_CRASH,
+            confidence = 0.98f,
+            reason = "Rider riding upright"
+        )
+
+        stateMachine.onOutcomeSelected(
+            outcome = CameraVerificationOutcome.FALSE_ALARM,
+            videoPath = "/recordings/crash_1.mp4",
+            visionResult = visionResult
+        )
+
+        assertEquals(CameraState.FINAL_RESULT, stateMachine.currentState)
+        assertEquals(CameraVerificationOutcome.FALSE_ALARM, stateMachine.currentSession?.outcome)
+        assertEquals(visionResult, stateMachine.currentSession?.visionResult)
+        assertFalse(stateMachine.currentSession?.isAnalyzingVision ?: true)
+    }
+
+    @Test
+    fun testVisionReturnsAfterOldCountdownPeriod_resolvesCorrectly() {
+        // Requirement B & C: Countdown reached while Vision is in-flight does not close session; later Vision result resolves
+        val alert = sampleAlert()
+        stateMachine.onImuRecoveryState(RecoveryState.PERSISTENT_ABNORMAL, alert)
+        stateMachine.onVisionAnalysisStarted("/recordings/crash_2.mp4")
+
+        // Countdown ticks to 0 while Vision is active
+        stateMachine.onCountdownTick(0)
+        assertEquals(CameraState.VERIFYING, stateMachine.currentState)
+        assertTrue(stateMachine.currentSession?.isAnalyzingVision == true)
+
+        // Vision completes at t = 14s
+        val visionResult = VisionClassificationResult(
+            decision = VisionDecision.NO_CRASH,
+            confidence = 1.0f,
+            reason = "Normal riding"
+        )
+        stateMachine.onOutcomeSelected(
+            outcome = CameraVerificationOutcome.FALSE_ALARM,
+            videoPath = "/recordings/crash_2.mp4",
+            visionResult = visionResult
+        )
+
+        assertEquals(CameraState.FINAL_RESULT, stateMachine.currentState)
+        assertEquals(CameraVerificationOutcome.FALSE_ALARM, stateMachine.currentSession?.outcome)
+    }
+
+    @Test
+    fun testVisionTimeout_resolvesToUncertainAndDismisses() {
+        // Requirement D: Vision timeout -> UNCERTAIN -> FINAL_RESULT -> dismissal
+        val alert = sampleAlert()
+        stateMachine.onImuRecoveryState(RecoveryState.PERSISTENT_ABNORMAL, alert)
+        stateMachine.onVisionAnalysisStarted("/recordings/crash_3.mp4")
+
+        val fallbackResult = VisionClassificationResult(
+            decision = VisionDecision.UNCERTAIN,
+            confidence = 0.0f,
+            reason = "Network or timeout error: timeout"
+        )
+
+        stateMachine.onOutcomeSelected(
+            outcome = CameraVerificationOutcome.UNCERTAIN,
+            videoPath = "/recordings/crash_3.mp4",
+            visionResult = fallbackResult
+        )
+
+        assertEquals(CameraState.FINAL_RESULT, stateMachine.currentState)
+        assertEquals(CameraVerificationOutcome.UNCERTAIN, stateMachine.currentSession?.outcome)
+
+        stateMachine.dismiss()
+        assertEquals(CameraState.IDLE, stateMachine.currentState)
+        assertNull(stateMachine.currentSession)
+    }
+
+    @Test
+    fun testManualOverrideWhileVisionProcessing_manualResultWins() {
+        // Requirement E & F: Manual override while Vision processing -> manual result wins and Vision cannot overwrite
+        val alert = sampleAlert()
+        stateMachine.onImuRecoveryState(RecoveryState.PERSISTENT_ABNORMAL, alert)
+        stateMachine.onVisionAnalysisStarted("/recordings/crash_4.mp4")
+
+        // User manually taps FALSE ALARM
+        stateMachine.onOutcomeSelected(CameraVerificationOutcome.FALSE_ALARM)
+        assertEquals(CameraState.FINAL_RESULT, stateMachine.currentState)
+        assertEquals(CameraVerificationOutcome.FALSE_ALARM, stateMachine.currentSession?.outcome)
+
+        // Vision later finishes with CRASH_CONFIRMED -> must be ignored!
+        val lateVisionResult = VisionClassificationResult(
+            decision = VisionDecision.CRASH,
+            confidence = 0.99f,
+            reason = "Late result"
+        )
+        stateMachine.onOutcomeSelected(
+            outcome = CameraVerificationOutcome.CRASH_CONFIRMED,
+            visionResult = lateVisionResult
+        )
+
+        // State remains FALSE_ALARM from manual override
+        assertEquals(CameraState.FINAL_RESULT, stateMachine.currentState)
+        assertEquals(CameraVerificationOutcome.FALSE_ALARM, stateMachine.currentSession?.outcome)
+    }
+
+    @Test
+    fun testDismissedSession_cannotBeResurrectedByLateOutcome() {
+        // Requirement G: Once dismissed, late callbacks cannot resurrect state machine
+        val alert = sampleAlert()
+        stateMachine.onImuRecoveryState(RecoveryState.PERSISTENT_ABNORMAL, alert)
+        stateMachine.onOutcomeSelected(CameraVerificationOutcome.FALSE_ALARM)
+        stateMachine.dismiss()
+
+        assertEquals(CameraState.IDLE, stateMachine.currentState)
+        assertNull(stateMachine.currentSession)
+
+        // Attempting to select outcome in IDLE state is rejected
+        stateMachine.onOutcomeSelected(CameraVerificationOutcome.CRASH_CONFIRMED)
+        assertEquals(CameraState.IDLE, stateMachine.currentState)
+        assertNull(stateMachine.currentSession)
     }
 }

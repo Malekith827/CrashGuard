@@ -3,6 +3,7 @@ package com.example.crashguard.camera
 import com.example.crashguard.data.CrashAlertState
 import com.example.crashguard.detection.DetectionLogger
 import com.example.crashguard.detection.RecoveryState
+import com.example.crashguard.vision.VisionClassificationResult
 import java.util.Locale
 
 /**
@@ -72,9 +73,28 @@ class CameraVerificationStateMachine {
     }
 
     /**
-     * Called when a manual user outcome or countdown timeout resolves the verification.
+     * Marks Vision LLM inference as in-flight on the active session.
      */
-    fun onOutcomeSelected(outcome: CameraVerificationOutcome, videoPath: String? = null, metaPath: String? = null) {
+    fun onVisionAnalysisStarted(videoFilePath: String) {
+        val session = currentSession ?: return
+        if (currentState == CameraState.VERIFYING) {
+            currentSession = session.copy(
+                isAnalyzingVision = true,
+                videoFilePath = videoFilePath
+            )
+        }
+    }
+
+    /**
+     * Called when Vision LLM result, manual user override, or countdown timeout resolves the verification.
+     * First terminal resolution wins; subsequent calls in non-VERIFYING states are safely ignored.
+     */
+    fun onOutcomeSelected(
+        outcome: CameraVerificationOutcome,
+        videoPath: String? = null,
+        metaPath: String? = null,
+        visionResult: VisionClassificationResult? = null
+    ) {
         val session = currentSession ?: return
         if (currentState != CameraState.VERIFYING) {
             DetectionLogger.w(TAG, "Cannot set outcome $outcome when in state $currentState")
@@ -83,8 +103,10 @@ class CameraVerificationStateMachine {
 
         val resolvedSession = session.copy(
             outcome = outcome,
+            isAnalyzingVision = false,
             videoFilePath = videoPath ?: session.videoFilePath,
-            metadataFilePath = metaPath ?: session.metadataFilePath
+            metadataFilePath = metaPath ?: session.metadataFilePath,
+            visionResult = visionResult ?: session.visionResult
         )
 
         currentState = CameraState.FINAL_RESULT

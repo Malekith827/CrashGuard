@@ -20,7 +20,8 @@ class CrashDetectionPipeline(
     private val stage2Verifier: Stage2Verifier = Stage2Verifier(),
     val recoveryStateMachine: RidingRecoveryStateMachine = RidingRecoveryStateMachine(),
     val experimentalRecoveryEnabled: Boolean = EXPERIMENTAL_RECOVERY_ENABLED,
-    val onCrashDetected: ((CrashAlertState) -> Unit)? = null
+    val onCrashDetected: ((CrashAlertState) -> Unit)? = null,
+    var onTelemetryUpdated: ((com.example.crashguard.data.PipelineDiagnosticsState) -> Unit)? = null
 ) : Closeable {
 
     companion object {
@@ -117,8 +118,19 @@ class CrashDetectionPipeline(
 
         val features = Stage1FeatureExtractor.extractFeatures(window)
         val s1Score = stage1Model.scoreWindow(features)
+        val isTriggered = s1Score >= STAGE1_P95_THRESHOLD
 
-        if (s1Score >= STAGE1_P95_THRESHOLD) {
+        onTelemetryUpdated?.invoke(
+            com.example.crashguard.data.PipelineDiagnosticsState(
+                pipelineState = if (isTriggered) "COLLECTING_POST_TRIGGER" else "IDLE",
+                s1AnomalyScore = s1Score,
+                s1Threshold = STAGE1_P95_THRESHOLD,
+                isS1Triggered = isTriggered,
+                lastS1TriggerTimestampNs = if (isTriggered) currentTs else triggerTimestampNs
+            )
+        )
+
+        if (isTriggered) {
             // Stage 1 Triggered!
             triggerTimestampNs = currentTs
             triggerStage1Score = s1Score
@@ -173,6 +185,28 @@ class CrashDetectionPipeline(
             )
         )
 
+        onTelemetryUpdated?.invoke(
+            com.example.crashguard.data.PipelineDiagnosticsState(
+                pipelineState = if (s2Result.isCrashConfirmed) {
+                    if (experimentalRecoveryEnabled) "OBSERVING_RECOVERY" else "CONFIRMED"
+                } else "IDLE",
+                s1AnomalyScore = triggerStage1Score,
+                s1Threshold = STAGE1_P95_THRESHOLD,
+                isS1Triggered = true,
+                lastS1TriggerTimestampNs = triggerTimestampNs,
+                s2ContinuousScore = s2Result.continuousCrashScore,
+                s2Threshold = s2Result.crashThreshold,
+                s2ShockScore = s2Result.scoreShock,
+                s2RotationScore = s2Result.scoreRotation,
+                s2AccelDampingScore = s2Result.scoreAccelDamping,
+                s2GyroDampingScore = s2Result.scoreGyroDamping,
+                s2TemporalScore = s2Result.temporalImpactRotationScore,
+                s2TemporalDelayS = s2Result.temporalDelayS,
+                s2DetectionLatencyS = s2Result.detectionLatencyS,
+                isS2Confirmed = s2Result.isCrashConfirmed
+            )
+        )
+
         if (s2Result.isCrashConfirmed) {
             if (!experimentalRecoveryEnabled) {
                 // Baseline Mode: immediate crash confirmation
@@ -210,6 +244,36 @@ class CrashDetectionPipeline(
         } else {
             0.0f
         }
+
+        onTelemetryUpdated?.invoke(
+            com.example.crashguard.data.PipelineDiagnosticsState(
+                pipelineState = when (recoveryResult.state) {
+                    RecoveryState.RECOVERED -> "IDLE"
+                    RecoveryState.PERSISTENT_ABNORMAL -> "COOLDOWN"
+                    RecoveryState.OBSERVING -> "OBSERVING_RECOVERY"
+                },
+                s1AnomalyScore = triggerStage1Score,
+                s1Threshold = STAGE1_P95_THRESHOLD,
+                isS1Triggered = true,
+                lastS1TriggerTimestampNs = triggerTimestampNs,
+                s2ContinuousScore = s2Result.continuousCrashScore,
+                s2Threshold = s2Result.crashThreshold,
+                s2ShockScore = s2Result.scoreShock,
+                s2RotationScore = s2Result.scoreRotation,
+                s2AccelDampingScore = s2Result.scoreAccelDamping,
+                s2GyroDampingScore = s2Result.scoreGyroDamping,
+                s2TemporalScore = s2Result.temporalImpactRotationScore,
+                s2TemporalDelayS = s2Result.temporalDelayS,
+                s2DetectionLatencyS = s2Result.detectionLatencyS,
+                isS2Confirmed = s2Result.isCrashConfirmed,
+                recoveryState = recoveryResult.state.name,
+                recoveryObservedS = recoveryResult.observedS,
+                recoveryHorizonS = recoveryResult.horizonS,
+                recoveryChunksObserved = recoveryResult.chunksObserved,
+                recoveryRefAccelStd = recoveryResult.referenceAccelStd,
+                recoveryRefGyroMean = recoveryResult.referenceGyroMean
+            )
+        )
 
         when (recoveryResult.state) {
             RecoveryState.RECOVERED -> {

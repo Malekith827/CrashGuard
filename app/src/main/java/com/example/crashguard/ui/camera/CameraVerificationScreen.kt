@@ -23,28 +23,29 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.example.crashguard.camera.CameraRecorder
+import com.example.crashguard.camera.CameraVerificationManager
 import com.example.crashguard.camera.CameraVerificationOutcome
 import com.example.crashguard.camera.CameraVerificationSession
+import com.example.crashguard.vision.VisionDecision
 import kotlinx.coroutines.delay
 import java.io.File
-import java.util.Locale
 
 @Composable
-fun CameraPulsingDot(color: Color) {
+fun CameraPulsingDot(color: Color, size: Int = 10) {
     val infiniteTransition = rememberInfiniteTransition(label = "camera_pulse")
     val alpha by infiniteTransition.animateFloat(
-        initialValue = 0.4f,
+        initialValue = 0.35f,
         targetValue = 1f,
         animationSpec = infiniteRepeatable(
-            animation = tween(800),
+            animation = tween(700),
             repeatMode = RepeatMode.Reverse
         ),
         label = "alpha"
@@ -52,9 +53,9 @@ fun CameraPulsingDot(color: Color) {
 
     Box(
         modifier = Modifier
-            .size(10.dp)
+            .size(size.dp)
             .alpha(alpha)
-            .clip(RoundedCornerShape(5.dp))
+            .clip(CircleShape)
             .background(color)
     )
 }
@@ -91,6 +92,25 @@ fun CameraVerificationOverlay(
     var recordedVideoFile by remember { mutableStateOf<File?>(null) }
     var isRecordingActive by remember { mutableStateOf(false) }
 
+    // Auto-record a short 2.5s clip for Vision LLM classification
+    LaunchedEffect(isRecordingActive) {
+        if (isRecordingActive) {
+            delay(2500)
+            cameraRecorder.stopRecording { file ->
+                isRecordingActive = false
+                if (file != null && file.exists() && file.length() > 0L) {
+                    recordedVideoFile = file
+                    CameraVerificationManager.onVideoRecorded(file)
+                } else {
+                    com.example.crashguard.detection.DetectionLogger.w(
+                        "CrashGuardCamera",
+                        "Recording stopped but video file is null, empty, or missing: ${file?.absolutePath}"
+                    )
+                }
+            }
+        }
+    }
+
     DisposableEffect(lifecycleOwner) {
         onDispose {
             cameraRecorder.release()
@@ -106,55 +126,64 @@ fun CameraVerificationOverlay(
         }
     }
 
+    val themeColor = when {
+        session.outcome == CameraVerificationOutcome.CRASH_CONFIRMED || (session.visionResult?.decision == VisionDecision.CRASH) -> Color(0xFFFF3D00)
+        session.outcome == CameraVerificationOutcome.FALSE_ALARM || (session.visionResult?.decision == VisionDecision.NO_CRASH) -> Color(0xFF00E676)
+        session.outcome == CameraVerificationOutcome.UNCERTAIN || (session.visionResult?.decision == VisionDecision.UNCERTAIN) -> Color(0xFFFF9100)
+        else -> Color(0xFFFF9100)
+    }
+
     Box(
         modifier = modifier
             .fillMaxSize()
-            .background(Color.Black.copy(alpha = 0.92f))
+            .background(Color.Black.copy(alpha = 0.95f))
             .padding(16.dp),
         contentAlignment = Alignment.Center
     ) {
         Card(
-            colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E1E)),
-            shape = RoundedCornerShape(16.dp),
-            modifier = Modifier
-                .fillMaxWidth()
-                .border(2.dp, Color(0xFFB71C1C), RoundedCornerShape(16.dp))
+            colors = CardDefaults.cardColors(containerColor = Color(0xFF14181E)),
+            shape = RoundedCornerShape(20.dp),
+            border = androidx.compose.foundation.BorderStroke(1.5.dp, themeColor.copy(alpha = 0.7f)),
+            modifier = Modifier.fillMaxWidth()
         ) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(18.dp),
+                    .padding(20.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(12.dp)
+                verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
-                // Header
+                // Header Bar
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.Center
+                    horizontalArrangement = Arrangement.Center,
+                    modifier = Modifier.fillMaxWidth()
                 ) {
-                    CameraPulsingDot(color = Color(0xFFFF1744))
-                    Spacer(modifier = Modifier.width(8.dp))
+                    CameraPulsingDot(color = themeColor, size = 12)
+                    Spacer(modifier = Modifier.width(10.dp))
                     Text(
-                        text = "POSSIBLE CRASH DETECTED",
-                        color = Color(0xFFFF1744),
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.Bold
+                        text = if (isResolved) "INCIDENT VERIFIED" else "CRASH VERIFICATION ACTIVE",
+                        color = themeColor,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        letterSpacing = 0.5.sp
                     )
                 }
 
                 Text(
-                    text = "Camera verification active",
-                    color = Color.LightGray,
-                    fontSize = 13.sp
+                    text = "Automated Multimodal Verification Layer",
+                    color = Color(0xFF90A4AE),
+                    fontSize = 12.sp
                 )
 
-                // Camera Preview View
+                // Live Camera Preview
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(200.dp)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(Color(0xFF121212)),
+                        .height(190.dp)
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(Color(0xFF0A0C0E))
+                        .border(1.dp, Color(0xFF263238), RoundedCornerShape(14.dp)),
                     contentAlignment = Alignment.Center
                 ) {
                     if (hasCameraPermission) {
@@ -184,21 +213,21 @@ fun CameraVerificationOverlay(
                             Box(
                                 modifier = Modifier
                                     .align(Alignment.TopStart)
-                                    .padding(8.dp)
+                                    .padding(10.dp)
                                     .clip(RoundedCornerShape(6.dp))
-                                    .background(Color.Black.copy(alpha = 0.7f))
-                                    .padding(horizontal = 8.dp, vertical = 4.dp)
+                                    .background(Color.Black.copy(alpha = 0.8f))
+                                    .padding(horizontal = 10.dp, vertical = 5.dp)
                             ) {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Box(
                                         modifier = Modifier
                                             .size(8.dp)
                                             .clip(CircleShape)
-                                            .background(Color.Red)
+                                            .background(Color(0xFFFF1744))
                                     )
                                     Spacer(modifier = Modifier.width(6.dp))
                                     Text(
-                                        text = "REC (NO AUDIO)",
+                                        text = "RECORDING EVIDENCE (2.5s)",
                                         color = Color.White,
                                         fontSize = 10.sp,
                                         fontWeight = FontWeight.Bold
@@ -214,13 +243,13 @@ fun CameraVerificationOverlay(
                         ) {
                             Text(
                                 text = "Camera preview unavailable",
-                                color = Color.Gray,
+                                color = Color(0xFF78909C),
                                 fontSize = 13.sp
                             )
-                            Spacer(modifier = Modifier.height(6.dp))
+                            Spacer(modifier = Modifier.height(8.dp))
                             Button(
                                 onClick = { permissionLauncher.launch(Manifest.permission.CAMERA) },
-                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32)),
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00C853)),
                                 shape = RoundedCornerShape(8.dp)
                             ) {
                                 Text("GRANT CAMERA PERMISSION", fontSize = 11.sp, fontWeight = FontWeight.Bold)
@@ -229,132 +258,163 @@ fun CameraVerificationOverlay(
                     }
                 }
 
-                // IMU Telemetry Card
-                val alert = session.crashAlert
-                Surface(
-                    color = Color(0xFF2A2A2A),
-                    shape = RoundedCornerShape(8.dp),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column(modifier = Modifier.padding(10.dp)) {
-                        Text(
-                            text = "IMU TELEMETRY",
-                            color = Color.Gray,
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Spacer(modifier = Modifier.height(4.dp))
+                // Vision LLM Analysis Progress Banner (VERIFYING)
+                if (session.isAnalyzingVision) {
+                    Surface(
+                        color = Color(0xFF1E242C),
+                        shape = RoundedCornerShape(12.dp),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFFF9100).copy(alpha = 0.4f)),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
                         Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween
+                            modifier = Modifier.padding(14.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.Center
                         ) {
-                            Text(
-                                text = "Stage 1 (Anomaly): " + String.format(Locale.US, "%.3f", alert.stage1Score),
-                                color = Color.White,
-                                fontSize = 11.sp,
-                                fontFamily = FontFamily.Monospace
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(20.dp),
+                                color = Color(0xFFFF9100),
+                                strokeWidth = 2.5.dp
                             )
+                            Spacer(modifier = Modifier.width(12.dp))
                             Text(
-                                text = "Stage 2 (Fall): " + String.format(Locale.US, "%.3f", alert.stage2Score),
-                                color = Color.White,
-                                fontSize = 11.sp,
-                                fontFamily = FontFamily.Monospace
+                                text = "Analyzing camera evidence with Gemini 3 Vision AI...",
+                                color = Color(0xFFFFB74D),
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.SemiBold
                             )
                         }
-                        Spacer(modifier = Modifier.height(2.dp))
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Text(
-                                text = "Shock: " + String.format(Locale.US, "%.2f", alert.shockScore) + " | Temporal: " + String.format(Locale.US, "%.2f", alert.temporalScore),
-                                color = Color.LightGray,
-                                fontSize = 11.sp,
-                                fontFamily = FontFamily.Monospace
-                            )
-                            Text(
-                                text = "State: " + alert.recoveryState,
-                                color = Color(0xFFFFB74D),
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold,
-                                fontFamily = FontFamily.Monospace
-                            )
+                    }
+                } else if (session.visionResult != null) {
+                    val vision = session.visionResult
+                    val (bannerBg, iconText, bannerTitle) = when (vision.decision) {
+                        VisionDecision.CRASH -> Triple(Color(0xFFB71C1C), "🚨", "Crash Detected & Confirmed")
+                        VisionDecision.NO_CRASH -> Triple(Color(0xFF1B5E20), "✅", "Crash Not Detected (False Alarm)")
+                        VisionDecision.UNCERTAIN -> Triple(Color(0xFFE65100), "⚠️", "Unable to Confirm Incident")
+                    }
+
+                    Surface(
+                        color = bannerBg.copy(alpha = 0.85f),
+                        shape = RoundedCornerShape(12.dp),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, bannerBg),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(modifier = Modifier.padding(14.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(text = iconText, fontSize = 16.sp)
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = "$bannerTitle (${(vision.confidence * 100).toInt()}%)",
+                                    color = Color.White,
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                            if (vision.reason.isNotBlank()) {
+                                Spacer(modifier = Modifier.height(6.dp))
+                                Text(
+                                    text = vision.reason,
+                                    color = Color(0xFFECEFF1),
+                                    fontSize = 12.sp,
+                                    lineHeight = 16.sp
+                                )
+                            }
                         }
                     }
                 }
 
-                // Resolution or Countdown Display
+                // Final Outcome Banner (if resolved)
                 if (isResolved) {
-                    val outcomeColor = when (session.outcome) {
-                        CameraVerificationOutcome.CRASH_CONFIRMED -> Color(0xFFD32F2F)
-                        CameraVerificationOutcome.FALSE_ALARM -> Color(0xFF2E7D32)
-                        CameraVerificationOutcome.UNCERTAIN -> Color(0xFFF57C00)
-                        else -> Color.White
+                    val (outcomeBg, outcomeText) = when (session.outcome) {
+                        CameraVerificationOutcome.CRASH_CONFIRMED -> Pair(Color(0xFFFF3D00), "FINAL OUTCOME: CRASH CONFIRMED")
+                        CameraVerificationOutcome.FALSE_ALARM -> Pair(Color(0xFF00E676), "FINAL OUTCOME: FALSE ALARM (DISMISSED)")
+                        CameraVerificationOutcome.UNCERTAIN -> Pair(Color(0xFFFF9100), "FINAL OUTCOME: UNCERTAIN")
+                        CameraVerificationOutcome.PENDING -> Pair(Color.Gray, "PENDING")
                     }
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(outcomeColor.copy(alpha = 0.25f))
-                            .border(1.dp, outcomeColor, RoundedCornerShape(8.dp))
-                            .padding(vertical = 10.dp),
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(outcomeBg.copy(alpha = 0.15f))
+                            .border(1.5.dp, outcomeBg, RoundedCornerShape(12.dp))
+                            .padding(vertical = 14.dp),
                         contentAlignment = Alignment.Center
                     ) {
                         Text(
-                            text = "OUTCOME: " + session.outcome.name.replace("_", " "),
-                            color = outcomeColor,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 14.sp
+                            text = outcomeText,
+                            color = outcomeBg,
+                            fontWeight = FontWeight.ExtraBold,
+                            fontSize = 14.sp,
+                            letterSpacing = 0.5.sp
                         )
                     }
                 } else {
                     Text(
                         text = "Auto-confirmation in ${session.countdownRemainingSeconds}s...",
-                        color = Color(0xFFFFB74D),
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Medium
+                        color = Color(0xFFFF9100),
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold
                     )
 
+                    // Manual Override Section
                     Column(
                         modifier = Modifier.fillMaxWidth(),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Button(
-                            onClick = {
-                                cameraRecorder.stopRecording { file ->
-                                    onOutcomeSelected(CameraVerificationOutcome.CRASH_CONFIRMED, file?.absolutePath)
-                                }
-                            },
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD32F2F)),
-                            shape = RoundedCornerShape(8.dp),
-                            modifier = Modifier.fillMaxWidth().height(48.dp)
-                        ) {
-                            Text("CRASH CONFIRMED", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                        }
+                        Text(
+                            text = "MANUAL OVERRIDE",
+                            color = Color(0xFF78909C),
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = 0.5.sp,
+                            modifier = Modifier.align(Alignment.CenterHorizontally)
+                        )
 
-                        Button(
-                            onClick = {
-                                cameraRecorder.stopRecording { file ->
-                                    onOutcomeSelected(CameraVerificationOutcome.FALSE_ALARM, file?.absolutePath)
-                                }
-                            },
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32)),
-                            shape = RoundedCornerShape(8.dp),
-                            modifier = Modifier.fillMaxWidth().height(48.dp)
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            Text("FALSE ALARM / CANCEL", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                        }
+                            Button(
+                                onClick = {
+                                    cameraRecorder.stopRecording { file ->
+                                        onOutcomeSelected(CameraVerificationOutcome.CRASH_CONFIRMED, file?.absolutePath ?: recordedVideoFile?.absolutePath)
+                                    }
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF3D00)),
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier.weight(1f).height(48.dp),
+                                contentPadding = PaddingValues(2.dp)
+                            ) {
+                                Text("CRASH CONFIRMED", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 11.sp, textAlign = TextAlign.Center)
+                            }
 
-                        OutlinedButton(
-                            onClick = {
-                                cameraRecorder.stopRecording { file ->
-                                    onOutcomeSelected(CameraVerificationOutcome.UNCERTAIN, file?.absolutePath)
-                                }
-                            },
-                            shape = RoundedCornerShape(8.dp),
-                            modifier = Modifier.fillMaxWidth().height(44.dp)
-                        ) {
-                            Text("UNCERTAIN", color = Color.LightGray, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                            Button(
+                                onClick = {
+                                    cameraRecorder.stopRecording { file ->
+                                        onOutcomeSelected(CameraVerificationOutcome.FALSE_ALARM, file?.absolutePath ?: recordedVideoFile?.absolutePath)
+                                    }
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00C853)),
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier.weight(1f).height(48.dp),
+                                contentPadding = PaddingValues(2.dp)
+                            ) {
+                                Text("FALSE ALARM", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 11.sp, textAlign = TextAlign.Center)
+                            }
+
+                            OutlinedButton(
+                                onClick = {
+                                    cameraRecorder.stopRecording { file ->
+                                        onOutcomeSelected(CameraVerificationOutcome.UNCERTAIN, file?.absolutePath ?: recordedVideoFile?.absolutePath)
+                                    }
+                                },
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier.weight(1f).height(48.dp),
+                                contentPadding = PaddingValues(2.dp),
+                                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF546E7A))
+                            ) {
+                                Text("UNCERTAIN", color = Color(0xFFECEFF1), fontWeight = FontWeight.SemiBold, fontSize = 11.sp, textAlign = TextAlign.Center)
+                            }
                         }
                     }
                 }

@@ -1,6 +1,7 @@
 package com.example.crashguard.camera
 
 import com.example.crashguard.data.CrashAlertState
+import com.example.crashguard.vision.VisionClassificationResult
 
 enum class CameraVerificationOutcome {
     PENDING,
@@ -24,5 +25,7 @@ data class CameraVerificationSession(
     val videoFilePath: String? = null,
     val metadataFilePath: String? = null,
     val isRecordingActive: Boolean = false,
+    val isAnalyzingVision: Boolean = false,
+    val visionResult: VisionClassificationResult? = null,
     val errorMessage: String? = null
 )

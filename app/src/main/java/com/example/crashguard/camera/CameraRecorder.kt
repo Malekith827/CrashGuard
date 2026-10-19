@@ -16,6 +16,7 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleOwner
 import com.example.crashguard.data.CrashAlertState
 import com.example.crashguard.detection.DetectionLogger
+import com.example.crashguard.vision.VisionClassificationResult
 import org.json.JSONObject
 import java.io.File
 import java.text.SimpleDateFormat
@@ -77,6 +78,8 @@ class CameraRecorder(private val context: Context) {
         }, ContextCompat.getMainExecutor(context))
     }
 
+    private var pendingStopCallback: ((File?) -> Unit)? = null
+
     fun startRecording(sessionId: String, onStarted: ((File) -> Unit)? = null, onError: ((Throwable) -> Unit)? = null) {
         val capture = videoCapture
         if (capture == null) {
@@ -104,9 +107,17 @@ class CameraRecorder(private val context: Context) {
                         }
                         is VideoRecordEvent.Finalize -> {
                             if (recordEvent.hasError()) {
-                                DetectionLogger.e(TAG, "Video recording error code: ${recordEvent.error}")
+                                DetectionLogger.e(TAG, "Video recording finalized with error: ${recordEvent.error} (${recordEvent.cause?.message})")
+                                val callback = pendingStopCallback
+                                pendingStopCallback = null
+                                currentRecording = null
+                                callback?.invoke(null)
                             } else {
-                                DetectionLogger.i(TAG, "Video recording finalized: ${videoFile.absolutePath}")
+                                DetectionLogger.i(TAG, "Video recording finalized successfully: ${videoFile.absolutePath} (size: ${videoFile.length()} bytes)")
+                                val callback = pendingStopCallback
+                                pendingStopCallback = null
+                                currentRecording = null
+                                callback?.invoke(videoFile)
                             }
                         }
                     }
@@ -118,13 +129,22 @@ class CameraRecorder(private val context: Context) {
     }
 
     fun stopRecording(onStopped: ((File?) -> Unit)? = null) {
+        val recording = currentRecording
+        if (recording == null) {
+            val file = currentVideoFile
+            DetectionLogger.w(TAG, "stopRecording called but currentRecording is null. Invoking callback with ${file?.name}")
+            onStopped?.invoke(file)
+            return
+        }
+
         try {
-            currentRecording?.stop()
-            currentRecording?.close()
+            pendingStopCallback = onStopped
+            DetectionLogger.i(TAG, "Stopping CameraX video recording (awaiting VideoRecordEvent.Finalize)...")
+            recording.stop()
         } catch (t: Throwable) {
             DetectionLogger.e(TAG, "Error stopping recording: ${t.message}", t)
-        } finally {
             val file = currentVideoFile
+            pendingStopCallback = null
             currentRecording = null
             onStopped?.invoke(file)
         }
@@ -132,7 +152,10 @@ class CameraRecorder(private val context: Context) {
 
     fun release() {
         try {
-            stopRecording()
+            pendingStopCallback = null
+            currentRecording?.stop()
+            currentRecording?.close()
+            currentRecording = null
             cameraProvider?.unbindAll()
             cameraProvider = null
             videoCapture = null
@@ -158,7 +181,8 @@ class CameraRecorder(private val context: Context) {
             sessionId: String,
             alert: CrashAlertState,
             outcome: CameraVerificationOutcome,
-            videoFilePath: String?
+            videoFilePath: String?,
+            visionResult: VisionClassificationResult? = null
         ): File? {
             return try {
                 val dir = getRecordingsDirectory(context)
@@ -180,6 +204,15 @@ class CameraRecorder(private val context: Context) {
                     put("recovery_observed_s", alert.recoveryObservedS.toDouble())
                     put("recovery_horizon_s", alert.recoveryHorizonS.toDouble())
                     put("details", alert.details)
+
+                    if (visionResult != null) {
+                        put("vision", JSONObject().apply {
+                            put("decision", visionResult.decision.name)
+                            put("confidence", visionResult.confidence.toDouble())
+                            put("reason", visionResult.reason)
+                            put("latency_ms", visionResult.latencyMs)
+                        })
+                    }
                 }
 
                 metaFile.writeText(json.toString(2))

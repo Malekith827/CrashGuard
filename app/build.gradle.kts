@@ -1,8 +1,21 @@
+import java.util.Properties
+import java.io.FileInputStream
+
 plugins {
   alias(libs.plugins.android.application)
   alias(libs.plugins.compose.compiler)
   alias(libs.plugins.kotlin.serialization)
 }
+
+val localProperties = Properties()
+val localPropertiesFile = rootProject.file("local.properties")
+if (localPropertiesFile.exists()) {
+    FileInputStream(localPropertiesFile).use { stream ->
+        localProperties.load(stream)
+    }
+}
+val geminiApiKey = localProperties.getProperty("gemini.api.key") ?: System.getenv("GEMINI_API_KEY") ?: ""
+val openAiApiKey = localProperties.getProperty("openai.api.key") ?: System.getenv("OPENAI_API_KEY") ?: ""
 
 android {
     namespace = "com.example.crashguard"
@@ -13,6 +26,8 @@ android {
         targetSdk = 36
         versionCode = 1
         versionName = "1.0"
+        buildConfigField("String", "GEMINI_API_KEY", "\"$geminiApiKey\"")
+        buildConfigField("String", "OPENAI_API_KEY", "\"$openAiApiKey\"")
     }
 
     buildTypes {
@@ -28,7 +43,7 @@ android {
     buildFeatures {
       compose = true
       aidl = false
-      buildConfig = false
+      buildConfig = true
       shaders = false
     }
 
@@ -82,6 +97,11 @@ dependencies {
   androidTestImplementation(libs.androidx.test.runner)
   androidTestImplementation(libs.androidx.test.espresso.core)
 
+
+
+  // OkHttp Networking for Vision LLM
+  implementation(libs.okhttp)
+  testImplementation(libs.okhttp.mockwebserver)
 
   // CameraX
   implementation(libs.androidx.camera.core)
